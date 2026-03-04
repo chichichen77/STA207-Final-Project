@@ -4,27 +4,26 @@ author: "ChiChun-Chen"
 date: "2026-03-03"
 output: html_document
 ---
-
-## Setup
+# ---- Extract Stayers Table ---- 
+## 1. Setup
 
 ```{r setup, include=TRUE}
 rm(list = ls())
 gc()
-
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "/Users/chichichen/Documents/Master/5-2026Winter/STA 207/Final_Project")
 # ---- 1. Packages ----
 pkgs <- c("haven","dplyr","tidyr","ggplot2","skimr","janitor","GGally",
           "data.table","plotly","stringr","broom","sandwich","lmtest",
-          "ggalluvial", "forcats", "scales")
+          "ggalluvial", "forcats", "scales", "purrr", "tibble")
 to_install <- pkgs[!pkgs %in% installed.packages()[,"Package"]]
 if(length(to_install)>0) install.packages(to_install)
 invisible(lapply(pkgs, library, character.only = TRUE))
 
 # ---- 2. Import data ----
-setwd("/Users/chichichen/Documents/Master/5-2026Winter/STA 207/Final_Project")
-df <- read_sav("STAR_Students.sav") %>% janitor::clean_names()
-
-cat("Total data count:", nrow(df), "\n")
-print(head(names(df), 25))
+# setwd("/Users/chichichen/Documents/Master/5-2026Winter/STA 207/Final_Project")
+df <- read_sav("../STAR_Students.sav") %>% janitor::clean_names()
+cat("Total data count:", nrow(df), "\n\n")
 
 # ---- 3. Variable maps ----
 map_long <- list(
@@ -38,16 +37,696 @@ map_long <- list(
   race   = "race"
 )
 
-# ---- 4.  ----
+# ---- 4. Keep only existing columns ----
+keep_exist <- function(x, data = df) {
+  x[x %in% names(data)]
+}
 
+predictor_vars <- map_long %>%
+  unlist(use.names = FALSE) %>%
+  unique() %>%
+  keep_exist(df)
 
-# ---- 5. Outcomes (G3 Total Math Scale Score for SAT) ----
-outcomes <- keep_exist("g3tmathss")
+outcome <- "g3tmathss"
+
+# ---- 5. Build a new dataframe with all selected variables + outcome ----
+analysis_vars <- c(predictor_vars, outcome) %>%
+  unique() %>%
+  keep_exist(df)
+
+df_analysis <- df %>%
+  dplyr::select(all_of(analysis_vars))
+
+# check result
+df_analysis <- df_analysis %>%
+  mutate(across(c("gkclasstype", "g1classtype", "g2classtype", "g3classtype"), as.factor))
+
+glimpse(df_analysis)
+names(df_analysis)
 ```
 
 
 
+## 2. [Pie Chart] Class Type
+Student who stay in the same class type for 4 pahses
+```{r}
+## ---- 1. Add class path + stayer flag ----
+df_analysis <- df_analysis %>%
+  mutate(
+    class_k = .data[[map_long$class[["k"]]]],
+    class_1 = .data[[map_long$class[["g1"]]]],
+    class_2 = .data[[map_long$class[["g2"]]]],
+    class_3 = .data[[map_long$class[["g3"]]]],
+    path_complete = !is.na(class_k) & !is.na(class_1) & !is.na(class_2) & !is.na(class_3),
+    stayer = if_else(
+      path_complete,
+      (class_k == class_1) & (class_1 == class_2) & (class_2 == class_3),
+      NA
+    ),
+    group = case_when(
+      is.na(stayer) ~ "Missing",
+      stayer ~ "Stayer", #  (K=G1=G2=G3)
+      TRUE   ~ "Mover" # (changed class type)
+    )
+  )
 
+## ---- 1. Count exact-match across grades ----
+stayer_table <- df_analysis %>%
+  count(group, name = "n") %>%
+  mutate(pct = n / sum(n))
 
+stayer_table
+# knitr::kable(stayer_table, digits = 3)
 
+# Pie chart for eda class type
+pie_df <- stayer_table %>%
+  mutate(
+    label = paste0(group, "\n", n, " (", percent(pct, accuracy = 0.1), ")")
+  )
+ggplot(pie_df, aes(x = "", y = pct, fill = group)) +
+  geom_col(width = 1, color = "white") +
+  coord_polar(theta = "y") +
+  geom_text(aes(label = label),
+            position = position_stack(vjust = 0.5),
+            size = 3) +
+  labs(title = "Stayer v.s. Mover v.s. Missing Path Pie Chart") +
+  theme_void() +
+  theme(legend.position = "none")
+```
 
+## 3. [Bar Plot] Stayer class distribution
+```{r}
+plot_df <- df_analysis %>%
+  filter(stayer == TRUE) %>%
+  count(class_3) %>%
+  mutate(class_3 = factor(class_3, levels = c("1","2","3")))
+
+ggplot(plot_df, aes(x = class_3, y = n, fill = class_3)) +
+  geom_col(width = 0.7, show.legend = FALSE) +
+  geom_text(aes(label = n), vjust = -0.35, size = 4) +
+  labs(
+    title = "Stayers: G3 Class Type Distribution",
+    x = "G3 class type",
+    y = "Count"
+  ) +
+  expand_limits(y = max(plot_df$n, na.rm = TRUE) * 1.10) +
+  theme_minimal()
+```
+
+## 4. [Sankey Plot] Transfer Class Type
+
+```{r}
+# NA -> "Unknown"
+df_sankey <- df_analysis %>%
+  transmute(
+    K  = if_else(is.na(class_k), "Unknown", as.character(class_k)),
+    G1 = if_else(is.na(class_1), "Unknown", as.character(class_1)),
+    G2 = if_else(is.na(class_2), "Unknown", as.character(class_2)),
+    G3 = if_else(is.na(class_3), "Unknown", as.character(class_3))
+  )
+
+#（K->G1, G1->G2, G2->G3）
+links_01 <- df_sankey %>% count(K,  G1, name="value") %>% transmute(source=paste0("K:",K),  target=paste0("G1:",G1), value=value)
+links_12 <- df_sankey %>% count(G1, G2, name="value") %>% transmute(source=paste0("G1:",G1), target=paste0("G2:",G2), value=value)
+links_23 <- df_sankey %>% count(G2, G3, name="value") %>% transmute(source=paste0("G2:",G2), target=paste0("G3:",G3), value=value)
+
+links <- bind_rows(links_01, links_12, links_23)
+nodes <- tibble(name = unique(c(links$source, links$target)))
+links <- links %>%
+  mutate(
+    source_id = match(source, nodes$name) - 1L,
+    target_id = match(target, nodes$name) - 1L
+  )
+
+plot_ly(
+  type = "sankey",
+  arrangement = "snap",
+  node = list(
+    label = nodes$name,
+    pad = 15,
+    thickness = 15
+  ),
+  link = list(
+    source = links$source_id,
+    target = links$target_id,
+    value  = links$value
+  )
+) %>%
+  layout(title = "Class-type Path Sankey Plot")
+```
+
+##  5. Extract stayer sample
+```{r}
+# Original Class Type Distribution
+df_stayers <- df_analysis %>%
+  filter(path_complete == TRUE, stayer == TRUE) %>%
+  rename(classtype = class_3) %>%
+  select(-any_of(c(
+    "gkclasstype","g1classtype","g2classtype","g3classtype",
+    "class_k","class_1","class_2",
+    "path_complete","stayer","group","n_switch"
+  )))
+
+# Plot 1 
+df_stayers %>%
+  mutate(classtype = as.factor(classtype)) %>%
+  count(classtype, name = "n_total") %>%
+  ggplot(aes(x = classtype, y = n_total, fill = classtype)) +
+  geom_col(width = 0.7, show.legend = FALSE) +
+  geom_text(aes(label = n_total), vjust = -0.3, size = 4) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+  labs(
+    title = "Stayers G3 Class Type Distribution",
+    x = "G3 class type",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+# Class Type Distribution With Missing Outcome
+df_sum <- df_stayers %>%
+  mutate(classtype = as.factor(classtype)) %>%
+  group_by(classtype) %>%
+  summarise(
+    n_na  = sum(is.na(g3tmathss)),
+    n_obs = sum(!is.na(g3tmathss)),
+    n_total = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(classtype) %>%
+  mutate(x = as.numeric(classtype))  # 給 geom_rect 用
+# Plot 2
+ggplot(df_sum, aes(x = classtype)) +
+  geom_col(aes(y = n_na), fill = "grey70", width = 0.7) +
+  geom_rect(
+    aes(
+      xmin = x - 0.35, xmax = x + 0.35,
+      ymin = n_na, ymax = n_total,
+      fill = classtype
+    ),
+    color = NA
+  ) +
+  geom_text(aes(y = n_total, label = n_total), vjust = -0.3, size = 4) +
+  geom_text(aes(y = n_na, label = ifelse(n_na > 0, n_na, "")),
+            color = "black", size = 3.6) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+  labs(
+    title = "Stayers G3 Class Type Distridution with Missing Outcome Count",
+    x = "G3 class type",
+    y = "Count"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Filter NA values
+df_stayers_nna <- df_stayers
+df_stayers_nna %>%
+  filter(!is.na(g3tmathss))
+# Plot 3
+df_stayers_nna%>%
+  mutate(classtype = as.factor(classtype)) %>%
+  count(classtype, name = "n_obs") %>%
+  ggplot(aes(x = classtype, y = n_obs, fill = classtype)) +
+  geom_col(width = 0.7, show.legend = FALSE) +
+  geom_text(aes(label = n_obs), vjust = -0.3, size = 4) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+  labs(
+    title = "Stayers G3 Class Type Distribution",
+    x = "G3 class type",
+    y = "Count"
+  ) +
+  theme_minimal()
+```
+
+# ---- Missing values pre-processing ---- 
+## Investigate what variable we are going to deal with
+```{r}
+na_check_function <- function(data,
+                              group_col = "classtype",
+                              vars = NULL,
+                              add_total = TRUE,
+                              include_type = TRUE,
+                              include_rate = FALSE,
+                              group_levels = c("1","2","3","Total")) {
+  stopifnot(is.data.frame(data))
+  if(!group_col %in% names(data)) stop("group_col not found in data: ", group_col)
+
+  if(is.null(vars)) {
+    vars <- setdiff(names(data), group_col)
+  } else {
+    vars <- intersect(vars, names(data))
+  }
+
+  # NA count for each group
+  na_4x24 <- data %>%
+    mutate(.group = as.character(.data[[group_col]])) %>%
+    group_by(.group) %>%
+    summarise(across(all_of(vars), ~ sum(is.na(.x))), .groups = "drop") %>%
+    rename(!!group_col := .group)
+
+  # Total row
+  if(add_total) {
+    na_total <- data %>%
+      summarise(across(all_of(vars), ~ sum(is.na(.x)))) %>%
+      mutate(!!group_col := "Total") %>%
+      select(all_of(group_col), everything())
+
+    na_4x24 <- bind_rows(na_4x24, na_total)
+  }
+
+  na_24x4 <- na_4x24 %>%
+    tibble::column_to_rownames(group_col) %>%
+    t() %>%
+    as.data.frame(check.names = FALSE) %>%
+    tibble::rownames_to_column("variable")
+
+  if(!is.null(group_levels)) {
+    missing_cols <- setdiff(group_levels, names(na_24x4))
+    for(mc in missing_cols) na_24x4[[mc]] <- 0
+    na_24x4 <- na_24x4 %>% select(variable, any_of(group_levels), everything())
+  }
+
+  # Add type column
+  if(include_type) {
+    type_tbl <- tibble::tibble(
+      variable = vars,
+      type = sapply(data[vars], function(x) paste(class(x), collapse = "/"))
+    )
+    na_24x4 <- na_24x4 %>% left_join(type_tbl, by = "variable")
+  }
+
+  # NA rate
+  if(include_rate) {
+    n_by_group <- data %>%
+      mutate(.group = as.character(.data[[group_col]])) %>%
+      count(.group, name = "n") %>%
+      rename(!!group_col := .group)
+
+    n_total <- nrow(data)
+    if(add_total) {
+      n_by_group <- bind_rows(n_by_group, tibble::tibble(!!group_col := "Total", n = n_total))
+    }
+
+    n_vec <- setNames(n_by_group$n, n_by_group[[group_col]])
+    grp_cols <- setdiff(names(na_24x4), c("variable","type","base_type","is_labelled"))
+    grp_cols <- intersect(names(n_vec), grp_cols)
+
+    na_24x4[ "NA_rate"] <- round(na_24x4[["Total"]] / n_vec[["Total"]], 4)
+  }
+
+  na_24x4
+}
+
+vars_24 <- setdiff(names(df_stayers), "classtype")
+na_check_function(df_stayers, group_col = "classtype", vars = vars_24,
+                              include_type = TRUE, include_rate = TRUE)
+```
+
+We only need to deal with "gkfreelunch", "g1freelunch", "g2freelunch", "g3freelunch", "gktyears", "g1tyears" ,"g2tyears", "g3tyears"
+
+## Functions for filling missing values
+
+```{r}
+to01_function <- function(x){
+  ifelse(x == 1, 1, ifelse(x == 2, 0, NA))
+}
+back12_function <- function(p){
+  ifelse(p >= 0.5, 1, 2)
+}
+# ---------- Helper-freelunch ----------
+impute_freelunch_glm_function <- function(data, target, predictors, min_complete = 30){
+  use_preds <- intersect(setdiff(predictors, target), names(data))
+
+  d <- data %>% dplyr::mutate(y = to01_function(.data[[target]]))
+  test_idx <- which(is.na(d$y))
+  if(length(test_idx) == 0) return(data)
+
+  model_df <- d %>%
+    dplyr::filter(!is.na(y)) %>%
+    dplyr::select(y, dplyr::all_of(use_preds)) %>%
+    tidyr::drop_na()
+
+  # fallback: mode
+  mode_val <- d %>%
+    dplyr::filter(!is.na(.data[[target]])) %>%
+    dplyr::count(.data[[target]], sort = TRUE) %>%
+    dplyr::slice(1) %>%
+    dplyr::pull(1)
+
+  if(nrow(model_df) < min_complete){
+    warning(paste("Too few complete cases for", target, "- fallback to mode"))
+    data[[target]][test_idx] <- mode_val
+    return(data)
+  }
+
+  fit <- glm(y ~ ., data = model_df, family = binomial())
+
+  newdata <- d %>% dplyr::slice(test_idx) %>% dplyr::select(dplyr::all_of(use_preds))
+  p <- suppressWarnings(predict(fit, newdata = newdata, type = "response"))
+
+  imputed <- back12_function(p)
+  imputed[is.na(imputed)] <- mode_val
+
+  data[[target]][test_idx] <- imputed
+  data
+}
+
+# ---------- Helper-tyears ----------
+impute_continuous_lm_function <- function(data, target, predictors, min_complete = 30, seed = 123){
+  use_preds <- intersect(setdiff(predictors, target), names(data))
+
+  idx <- which(is.na(data[[target]]))
+  if(length(idx) == 0) return(data)
+
+  train <- data %>%
+    dplyr::select(dplyr::all_of(c(target, use_preds))) %>%
+    tidyr::drop_na()
+
+  if(nrow(train) < min_complete){
+    warning(paste("Too few complete cases for", target, "- fallback to median"))
+    med <- median(data[[target]], na.rm = TRUE)
+    data[[target]][idx] <- as.integer(round(med))   # <- 整數
+    return(data)
+  }
+
+  fit <- lm(reformulate(use_preds, response = target), data = train)
+  resid_pool <- residuals(fit)
+
+  newdata <- data[idx, use_preds, drop = FALSE]
+  pred <- predict(fit, newdata = newdata)
+
+  set.seed(seed)
+  noise <- sample(resid_pool, size = length(pred), replace = TRUE)
+
+  imputed <- pred + noise
+  imputed <- pmax(imputed, 0)               
+  imputed <- as.integer(round(imputed))    
+
+  data[[target]][idx] <- imputed
+  data
+}
+
+# ---------- Main pipeline ----------
+impute_star_covariates_function <- function(data,
+                                   freelunch_targets = c("gkfreelunch","g1freelunch","g2freelunch","g3freelunch"),
+                                   tyears_targets    = c("gktyears","g1tyears","g2tyears","g3tyears"),
+                                   seed = 123){
+
+  pred_pool_common <- c(
+    "gender","race","classtype",
+    "gksurban","g1surban","g2surban","g3surban",
+    "gktmathss","g1tmathss","g2tmathss"
+  )
+
+  # 1. freelunch imputation
+  preds_lunch <- intersect(c(pred_pool_common, freelunch_targets), names(data))
+  out <- data
+  for(tgt in intersect(freelunch_targets, names(out))){
+    out <- impute_freelunch_glm_function(out, tgt, preds_lunch, min_complete = 30)
+  }
+
+  # 2. tyears imputation (after freelunch, so SES predictors are more complete)
+  preds_tyears <- intersect(c(pred_pool_common, tyears_targets, freelunch_targets), names(out))
+  for(tgt in intersect(tyears_targets, names(out))){
+    out <- impute_continuous_lm_function(out, tgt, preds_tyears, min_complete = 30, seed = seed)
+  }
+
+  out
+}
+```
+
+## Fill in missing values
+```{r}
+df_stayers_imp <- impute_star_covariates_function(df_stayers, seed = 123)
+
+na_after <- na_check_function(df_stayers_imp, group_col="classtype", vars=vars_24,
+                              include_type=TRUE, include_rate=TRUE)
+
+na_after %>% filter(variable %in% c("gkfreelunch","g1freelunch","g2freelunch","g3freelunch",
+                                   "gktyears","g1tyears","g2tyears","g3tyears"))
+
+```
+
+## Filtered NA value
+
+```{r}
+df_stayers <- df_stayers_imp %>%
+  filter(!is.na(g3tmathss))
+na_check_function(df_stayers, group_col="classtype", vars=vars_24,
+                              include_type=TRUE, include_rate=TRUE)
+write.csv(df_stayers, "df_stayers_final.csv", row.names = TRUE)
+```
+
+## EDA all variables
+
+```{r}
+vars <- c(
+  "gkschid","g1schid","g2schid","g3schid",
+  "gktchid","g1tchid","g2tchid","g3tchid",
+  "gkfreelunch","g1freelunch","g2freelunch","g3freelunch",
+  "gksurban","g1surban","g2surban","g3surban",
+  "gktyears","g1tyears","g2tyears","g3tyears",
+  "gender","race","g3tmathss","classtype"
+)
+vars <- intersect(vars, names(df_stayers))
+
+df_eda <- df_stayers %>%
+  select(all_of(vars)) %>%
+  mutate(classtype = as.factor(classtype))
+
+# Helper: grade labels
+grade_map <- function(x){
+  recode(x,
+         gk="K", g1="G1", g2="G2", g3="G3",
+         gks="K", g1s="G1", g2s="G2", g3s="G3")
+}
+
+# ---- 1. Overall column audit ----
+col_audit <- tibble(
+  variable = names(df_eda),
+  type = sapply(df_eda, \(x) paste(class(x), collapse="/")),
+  base_type = sapply(df_eda, typeof),
+  n = nrow(df_eda),
+  n_miss = sapply(df_eda, \(x) sum(is.na(x))),
+  miss_rate = round(n_miss / n, 4),
+  n_unique_nonmiss = sapply(df_eda, \(x) dplyr::n_distinct(x, na.rm = TRUE))
+) %>% arrange(desc(miss_rate), desc(n_miss))
+
+col_audit
+# knitr::kable(col_audit, digits = 4)
+
+# ---- 2. Missingness by classtype (for causal balance / data quality) ----
+miss_by_classtype <- df_eda %>%
+  group_by(classtype) %>%
+  summarise(across(everything(), ~ round(mean(is.na(.x)), 4)), .groups = "drop")
+
+miss_by_classtype
+# knitr::kable(miss_by_classtype, digits = 4)
+
+# ----  freelunch & surban ----
+make_long_cat <- function(data, cols, value_name){
+  data %>%
+    select(classtype, all_of(cols)) %>%
+    pivot_longer(cols = all_of(cols), names_to = "var", values_to = value_name) %>%
+    mutate(
+      grade = case_when(
+        grepl("^gk", var) ~ "K",
+        grepl("^g1", var) ~ "G1",
+        grepl("^g2", var) ~ "G2",
+        grepl("^g3", var) ~ "G3",
+        TRUE ~ var
+      )
+    )
+}
+
+# ---- 3.Free lunch by grade (proportion) ----
+lunch_cols <- intersect(c("gkfreelunch","g1freelunch","g2freelunch","g3freelunch"), names(df_eda))
+
+df_lunch_long <- make_long_cat(df_eda, lunch_cols, "freelunch") %>%
+  mutate(
+    freelunch = factor(freelunch, levels = c(1,2), labels = c("Free lunch","Non-free"))
+  )
+
+lunch_sum <- df_lunch_long %>%
+  count(grade, freelunch) %>%
+  group_by(grade) %>%
+  mutate(pct = n/sum(n)) %>%
+  ungroup()
+
+ggplot(lunch_sum, aes(x = grade, y = pct, fill = freelunch)) +
+  geom_col(width = 0.7) +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Free lunch rate by grade", x = "Grade", y = "Proportion", fill = NULL) +
+  theme_minimal()
+
+# Free lunch by grade (counts) 
+ggplot(lunch_sum, aes(x = grade, y = n, fill = freelunch)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = percent(pct, accuracy = 0.1)),
+            position = position_stack(vjust = 0.5), size = 3.5) +
+  labs(title = "Free lunch counts by grade", x = "Grade", y = "Count", fill = NULL) +
+  theme_minimal()
+
+# Free lunch switch rate across grades
+switch_rate <- function(data, v1, v2, name){
+  data %>%
+    filter(!is.na(.data[[v1]]), !is.na(.data[[v2]])) %>%
+    summarise(
+      pair = name,
+      n = n(),
+      n_switch = sum(.data[[v1]] != .data[[v2]]),
+      switch_rate = round(n_switch / n, 4)
+    )
+}
+
+if(length(lunch_cols) == 4){
+  bind_rows(
+    switch_rate(df_eda, "gkfreelunch","g1freelunch","K→G1"),
+    switch_rate(df_eda, "g1freelunch","g2freelunch","G1→G2"),
+    switch_rate(df_eda, "g2freelunch","g3freelunch","G2→G3")
+  )
+}
+
+# ---- 3. Surban by grade (proportion) ----
+urban_cols <- intersect(c("gksurban","g1surban","g2surban","g3surban"), names(df_eda))
+df_urban_long <- make_long_cat(df_eda, urban_cols, "surban") %>%
+  mutate(surban = as.factor(surban))
+
+urban_sum <- df_urban_long %>%
+  count(grade, surban) %>%
+  group_by(grade) %>%
+  mutate(pct = n/sum(n)) %>%
+  ungroup()
+
+ggplot(urban_sum, aes(x = grade, y = pct, fill = surban)) +
+  geom_col(width = 0.7) +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Urbanicity (surban) distribution by grade", x = "Grade", y = "Proportion", fill = NULL) +
+  theme_minimal()
+
+# ---- 4. Continuous longitudinal EDA: tyears ----
+tyears_cols <- intersect(c("gktyears","g1tyears","g2tyears","g3tyears"), names(df_eda))
+
+df_tyears_long <- df_eda %>%
+  select(classtype, all_of(tyears_cols)) %>%
+  pivot_longer(cols = all_of(tyears_cols), names_to = "var", values_to = "tyears") %>%
+  mutate(
+    grade = case_when(
+      grepl("^gk", var) ~ "K",
+      grepl("^g1", var) ~ "G1",
+      grepl("^g2", var) ~ "G2",
+      grepl("^g3", var) ~ "G3",
+      TRUE ~ var
+    )
+  )
+
+# Summary table by grade
+tyears_summary <- df_tyears_long %>%
+  group_by(grade) %>%
+  summarise(
+    n = sum(!is.na(tyears)),
+    mean = mean(tyears, na.rm = TRUE),
+    sd = sd(tyears, na.rm = TRUE),
+    median = median(tyears, na.rm = TRUE),
+    p25 = quantile(tyears, 0.25, na.rm = TRUE),
+    p75 = quantile(tyears, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+tyears_summary
+# knitr::kable(tyears_summary, digits = 3)
+
+# Boxplot by grade
+ggplot(df_tyears_long, aes(x = grade, y = tyears)) +
+  geom_boxplot() +
+  labs(title = "Teacher years of experience (tyears) by grade", x = "Grade", y = "tyears") +
+  theme_minimal()
+
+# Boxplot by classtype (using G3 tyears as example if available)
+if("g3tyears" %in% names(df_eda)){
+  ggplot(df_eda, aes(x = classtype, y = g3tyears, fill = classtype)) +
+    geom_boxplot(show.legend = FALSE) +
+    labs(title = "G3 teacher years (g3tyears) by class type", x = "Class type", y = "g3tyears") +
+    theme_minimal()
+}
+
+# ---- 5. Demographics: gender / race ----
+if("race" %in% names(df_eda)){
+
+  df_eda2 <- df_eda %>%
+    mutate(
+      race_bin = case_when(
+        is.na(race) ~ NA_character_,
+        race == 1 ~ "White",
+        TRUE ~ "Other"
+      ) %>% factor(levels = c("White","Other"))
+    )
+
+  # Overall distribution
+  df_eda2 %>%
+    count(race_bin, name = "n") %>%
+    ggplot(aes(x = race_bin, y = n, fill = race_bin)) +
+    geom_col(show.legend = FALSE) +
+    geom_text(aes(label = n), vjust = -0.3, size = 4) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+    labs(title = "Race (binary): White vs Other", x = "Race", y = "Count") +
+    theme_minimal()
+
+  # By classtype (proportion)
+  df_eda2 %>%
+    count(classtype, race_bin, name = "n") %>%
+    group_by(classtype) %>%
+    mutate(pct = n/sum(n)) %>%
+    ungroup() %>%
+    ggplot(aes(x = classtype, y = pct, fill = race_bin)) +
+    geom_col(position = "fill", width = 0.7) +
+    scale_y_continuous(labels = percent) +
+    labs(title = "Race (White vs Other) by class type", x = "Class type", y = "Proportion", fill = NULL) +
+    theme_minimal()
+}
+
+# ---- 6. Outcome: g3tmathss ----
+if("g3tmathss" %in% names(df_eda)){
+  ggplot(df_eda, aes(x = g3tmathss)) +
+    geom_histogram(bins = 30) +
+    labs(title = "Distribution of g3tmathss", x = "g3tmathss", y = "Count") +
+    theme_minimal()
+
+  ggplot(df_eda, aes(x = classtype, y = g3tmathss, fill = classtype)) +
+    geom_boxplot(show.legend = FALSE) +
+    labs(title = "g3tmathss by class type", x = "Class type", y = "g3tmathss") +
+    theme_minimal()
+
+  df_eda %>%
+    group_by(classtype) %>%
+    summarise(
+      n = sum(!is.na(g3tmathss)),
+      mean = mean(g3tmathss, na.rm = TRUE),
+      sd = sd(g3tmathss, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+# ---- 7. IDs: school/teacher ----
+top_freq <- function(x, k = 10){
+  tibble(val = x) %>%
+    filter(!is.na(val)) %>%
+    count(val, sort = TRUE) %>%
+    slice(1:k)
+}
+
+id_cols <- intersect(c("gkschid","g1schid","g2schid","g3schid","gktchid","g1tchid","g2tchid","g3tchid"), names(df_eda))
+
+id_summary <- tibble(
+  variable = id_cols,
+  n_unique = sapply(df_eda[id_cols], \(x) n_distinct(x, na.rm = TRUE)),
+  miss_rate = sapply(df_eda[id_cols], \(x) round(mean(is.na(x)), 4))
+)
+
+id_summary
+# knitr::kable(id_summary, digits = 4)
+
+# Example: show top 10 schools in G3 (if exists)
+if("g3schid" %in% names(df_eda)){
+  top_freq(df_eda$g3schid, k = 10)
+}
+```
