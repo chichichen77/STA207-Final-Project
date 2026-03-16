@@ -1,0 +1,145 @@
+---
+title: "STA 207 - Kindergarten"
+author: "Elaine Guo"
+date: "2026-03-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## STA 207 Project
+
+## Setup
+
+```{r}
+# load libraries
+library(tidyverse)
+library(haven)
+library(lme4)
+```
+
+```{r}
+# read in the data
+data = haven::read_sav("STAR_Students.sav")
+```
+## Interaction Plots
+
+```{r}
+# create a dataset that only considers observations that aren't missing any variables of interest
+data_clean = data %>%
+  filter(!is.na(gkclasstype)) %>%
+  filter(!is.na(gkschid)) %>%
+  filter(!is.na(race)) %>%
+  filter(!is.na(gktchid)) %>%
+  filter(!is.na(gkfreelunch)) %>%
+  filter(!is.na(gktmathss))
+```
+
+```{r}
+# factor categorical variables
+data_clean$gkclasstype = factor(data_clean$gkclasstype)
+data_clean$gkschid = factor(data_clean$gkschid)
+data_clean$race = factor(data_clean$race)
+data_clean$gktchid = factor(data_clean$gktchid)
+data_clean$gkfreelunch = factor(data_clean$gkfreelunch)
+```
+
+```{r}
+# number of observations
+nrow(data_clean)
+```
+
+```{r}
+# create a new variable for race that indicates Black vs. non-Black
+data_clean_2 = data_clean %>%
+  mutate(race_bnb = (race==2))
+```
+
+```{r}
+levels(data_clean_2$gkclasstype)
+```
+
+```{r}
+levels(data_clean_2$gkfreelunch)
+```
+
+
+
+```{r}
+# rename factor levels
+levels(data_clean_2$gkclasstype) = c("Small", "Regular", "Regular+Aide")
+levels(data_clean_2$gkfreelunch) = c("FreeLunch", "NotFreeLunch")
+```
+
+```{r}
+# interaction plot of race and class type
+ggplot(data_clean_2, aes(x = gkclasstype, y = gktmathss, color = race_bnb, group = race_bnb)) +
+  stat_summary(fun = mean, geom = "point", size = 3) +
+  stat_summary(fun = mean, geom = "line", size = 1) +
+  labs(title = "Interaction of Race and Class Type", 
+       x = "Class Type",
+       y = "Total Math SAT Score",
+       color = "Race") +
+  scale_color_discrete(labels = c("TRUE" = "Black", "FALSE" = "Non-Black")) +
+  theme_minimal()
+```
+```{r}
+# interaction plot of free lunch status and class type
+ggplot(data_clean_2, aes(x = gkclasstype, y = gktmathss, color = gkfreelunch, group = gkfreelunch)) +
+  stat_summary(fun = mean, geom = "point", size = 3) +
+  stat_summary(fun = mean, geom = "line", size = 1) +
+  labs(title = "Interaction of Free Lunch Status and Class Type", 
+       x = "Class Type",
+       y = "Total Math SAT Score",
+       color = "Free Lunch Status") +
+  theme_minimal()
+```
+
+## Model Training
+
+```{r}
+set.seed(1)
+
+# mixed effects model (teacher ID is random effect)
+full_model = lmer(gktmathss ~ gkclasstype + gkschid + race_bnb + gkfreelunch + (1 | gktchid), data = data_clean_2)
+summary(full_model)
+```
+```{r}
+plot(full_model, which = 1, main = "Residuals Vs. Fitted", xlab = "Fitted Values", ylab = "Residuals")
+```
+```{r}
+library(emmeans)
+```
+
+```{r}
+emmeans(full_model, pairwise~gkclasstype, adjust='tukey')
+```
+
+## Sensitivity Analysis
+
+```{r}
+# relabel class types so that regular classes that dropped into the class size range of small classes are relabeled as such
+
+data_relabeled_2 = data_clean_2 %>%
+  mutate(new_gkclasstype = case_when(
+    gkclasssize <= 17 ~ "Small",
+    gkclasstype == "Regular" ~ "Regular",
+    gkclasstype == "Regular+Aide" ~ "Regular+Aide",
+    .default = "0"
+  ))
+```
+
+```{r}
+# relevel the factor of relabeled class type
+data_relabeled_2$new_gkclasstype = factor(data_relabeled_2$new_gkclasstype, levels=c("Small", "Regular", "Regular+Aide"))
+
+# train on model on the relabeled data
+model_3 = lmer(gktmathss ~ new_gkclasstype + gkschid + race_bnb + gkfreelunch + (1 | gktchid), data = data_relabeled_2)
+summary(model_3)
+```
+```{r}
+emmeans(model_3, pairwise~new_gkclasstype, adjust='tukey')
+```
+
