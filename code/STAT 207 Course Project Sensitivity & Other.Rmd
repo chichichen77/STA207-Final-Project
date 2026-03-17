@@ -1,0 +1,178 @@
+---
+title: "STAT 207 Course Project Sensitivity & Other"
+author: "William Baggott"
+date: "2026-02-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(haven)
+library(ggplot2)
+library(performance)
+library(lme4)
+library(dplyr)
+library(lme4)
+library(car)
+library(emmeans)
+library(kableExtra)
+library(webshot2)
+library(forcats)
+```
+
+
+```{r}
+STAR_Students <- read_sav("dataverse_files/STAR_Students.sav")
+
+
+STAR.Final.Clean = STAR_Students %>% 
+  filter(!is.na(gkclasstype)) %>% 
+  filter(!is.na(gkschid)) %>% 
+  filter(!is.na(race)) %>% 
+  filter(!is.na(gktchid)) %>% 
+  filter(!is.na(gkfreelunch)) %>% 
+  filter(!is.na(gktmathss))
+
+STAR.Final.Clean$gkclasstype = factor(STAR.Final.Clean$gkclasstype)
+STAR.Final.Clean$gkschid = factor(STAR.Final.Clean$gkschid)
+STAR.Final.Clean$gktchid = factor(STAR.Final.Clean$gktchid)
+STAR.Final.Clean$gkfreelunch = factor(STAR.Final.Clean$gkfreelunch)
+STAR.Final.Clean$race = factor(STAR.Final.Clean$race)
+
+STAR.Final.Clean = STAR.Final.Clean %>% 
+  mutate(
+    racecompact = fct_collapse(race, Black = c("2"), 'Non-Black' = c("1", "3", "4", "5", "6"))
+  )
+
+STAR.Final.Clean$racecompact = factor(STAR.Final.Clean$racecompact)
+```
+
+
+
+```{r}
+STAR_Students$gktchid = factor(STAR_Students$gktchid)
+summary(STAR_Students$gktchid)
+```
+
+
+```{r}
+# Boxplot of Math Scores by Teachers
+ggplot(STAR_Students, aes(x = factor(gktchid), y = gktmathss)) +
+  geom_boxplot(fill = "steelblue", alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Variation Across Groups", x = "Random Effect Levels", y = "Outcome")
+```
+```{r}
+Teacher_Stats <- STAR_Students %>%
+  group_by(gktchid) %>%
+  summarise(
+    mean = round(mean(gktmathss, na.rm = T), 1),
+    median = median(gktmathss, na.rm = T),
+    min = min(gktmathss, na.rm = T),
+    max = max(gktmathss, na.rm = T),
+    Q1 = round(quantile(gktmathss, 0.25, na.rm = T), 1),
+    Q3 = round(quantile(gktmathss, 0.75, na.rm = T), 1)
+  )
+
+Teacher.Stats.Head = head(Teacher_Stats, 10)
+Teacher.Stats.Head
+
+
+```
+
+```{r}
+ICC.model = lmer(gktmathss ~ 1 + (1 | gktchid), data = STAR_Students)
+icc(ICC.model)
+#Since ICC has a fairly high value, there is a high proportion of variance explained by the grouping structure, so we have strong evidence that random effects works better for this variable.
+```
+
+
+
+```{r}
+
+ggplot(STAR.Final.Clean, aes(x = racecompact, y = gktmathss, fill = racecompact)) +
+  geom_boxplot() + 
+  theme_minimal() +
+  labs(title = "Variation Between Black and Non-Black Races", x = "Race", y = "Kindergarten Math Score", fill = "Race")
+```
+
+
+```{r}
+summary(STAR_Students$gktyears)
+```
+
+```{r}
+ggplot(STAR_Students, aes(x = gktyears, y = gktmathss)) +
+  geom_col(fill = "steelblue", alpha = 0.7) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(STAR_Students, aes(x = gktyears)) +
+  geom_histogram(fill = "steelblue", alpha = 0.7) +
+  theme_minimal()
+```
+
+
+
+
+```{r}
+STAR.Model = lmer(gktmathss ~ gkclasstype + gkschid + racecompact + gkfreelunch + (1 | gktchid), data = STAR.Final.Clean)
+
+STAR.Model.Residuals = residuals(STAR.Model)
+
+emmeans(STAR.Model, pairwise ~ gkclasstype, adjust = "tukey")
+
+
+Causal.Data = data.frame(
+ClassType = factor(c("Small", "Regular", "Regular With Aid"), levels = c("Small", "Regular", "Regular With Aid")),
+Mean = c(487, 479, 479),
+SE = c(1.83, 1.95, 1.93),
+Low.Cl = c(484, 475, 475),
+Up.Cl = c(491, 483, 483)
+)
+
+ggplot(Causal.Data, aes(x = ClassType, y = Mean, ymin = Low.Cl, ymax = Up.Cl)) +
+   geom_point() +
+   geom_errorbar(width = 0.2) +
+   labs(title = "Estimated Marginal Means of Kindergarten Math Scores by Type of Class",
+        x = "Class Type",
+        y = "Estimated Marginal Mean (EMM)") +
+   theme_minimal()
+
+
+```
+
+
+
+```{r}
+STAR.Model.Residuals = residuals(STAR.Model)
+```
+
+
+```{r}
+#QQ Plot
+STAR.qqPlot = qqPlot(STAR.Model.Residuals, id = F, main = "QQ Plot", xlab = "Theoretical Quantiles", ylab = "Sample Quantiles")
+
+#Residuals Vs Fitted Plot
+STAR.RvF = plot(STAR.Model, which = 1, main = "Residuals Vs. Fitted", xlab = "Fitted Values", ylab = "Residuals")
+STAR.RvF
+
+#Jitter Residuals Vs Fitted Plot
+STAR.Model.Fitted = fitted(STAR.Model)
+
+STAR.RvF.J = ggplot(data.frame(STAR.Model.Fitted, STAR.Model.Residuals), aes(x = STAR.Model.Fitted, y = STAR.Model.Residuals)) +
+  geom_jitter(width = 0.4, height = 0, alpha = 0.3) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(x = "Fitted Values (Jittered)", y = "Residuals", title = "Residuals Vs. Fitted (Jittered)") +
+  theme_bw()
+STAR.RvF.J
+
+
+
+```
+
+
