@@ -64,6 +64,8 @@ library(dplyr)
 library(ggplot2)
 library(forcats)
 library(car)
+library(knitr)
+library(kableExtra)
 
 data = haven::read_sav("STAR_Students.sav")
 
@@ -284,7 +286,89 @@ plot(full_model, which = 1, main = "Residuals Vs. Fitted", xlab = "Fitted Values
 
 ### Inference & Interpretation
 
-**Table: Summary of Estimated Coefficients (Fixed Effects)**
+```{r table-estimated-coef-fixed-effects, echo=FALSE, message=FALSE, warning=FALSE}
+fixed_effects_table <- data.frame(
+  Term = c(
+    "Intercept",
+    "gkclasstypeRegular",
+    "gkclasstypeRegular+Aide",
+    "race_bnbTRUE",
+    "gkfreelunchNotFreeLunch"
+  ),
+  `Estimated Coefficient` = c(
+    457.289283,
+    -8.438876,
+    -8.190977,
+    -17.056508,
+    19.808430
+  ),
+  `Standard Error` = c(
+    11.025474,
+    2.574114,
+    2.559227,
+    2.234509,
+    1.267888
+  ),
+  `t Value` = c(
+    41.476,
+    -3.278,
+    -3.201,
+    -7.633,
+    15.623
+  )
+)
+
+kable(
+  fixed_effects_table,
+  caption = "Summary of Estimated Coefficients (Fixed Effects)",
+  digits = c(0, 6, 6, 3),
+  align = c("l", "c", "c", "c"),
+  booktabs = TRUE
+) %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+```{r table-estimated-variance-random-effects, echo=FALSE, message=FALSE, warning=FALSE}
+random_effects_table <- data.frame(
+  Groups = c("gktchid", "Residual"),
+  Name = c("(Intercept)", ""),
+  Variance = c(266.5, 1516.3),
+  `Std. Dev.` = c(16.33, 38.94)
+)
+
+kable(
+  random_effects_table,
+  caption = "Summary of Estimated Variance (Random Effects)",
+  digits = c(1, 2),
+  align = c("l", "l", "c", "c"),
+  booktabs = TRUE
+) %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+```{r table-estimated-differences, echo=FALSE, message=FALSE, warning=FALSE}
+library(knitr)
+library(kableExtra)
+
+estimated_diff_table <- data.frame(
+  `Class Size` = c(
+    "Small - Regular",
+    "Small - Regular + Aid",
+    "Regular - Regular + Aide"
+  ),
+  `Estimated Difference` = c("8.439", "8.191", "-0.248"),
+  `Standard Error` = c("2.57", "2.56", "2.66"),
+  `P-Value` = c("0.0030", "0.0039", "0.9952")
+)
+
+kable(
+  estimated_diff_table,
+  caption = "Summary of Estimated Differences",
+  align = c("l", "c", "c", "c"),
+  booktabs = TRUE
+) %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
 
 Estimated Coefficients & Interpretations:
 
@@ -346,7 +430,82 @@ STAR.RvF.J = ggplot(data.frame(STAR.Model.Fitted, STAR.Model.Residuals), aes(x =
 
 There were some Kindergarten classes that were initially labeled as regular or regular with teacher’s aid, but their actual class size dropped into the range for small classes. This would be one example of a potential violation of SUTVA; not all students in “Regular” classes received the same treatment, since some of them actually were in class sizes that were relatively small. To explore how accounting for actual class sizes would affect our conclusions, we re-labeled class types so that classes with 17 students or less were categorized as “Small” classes and then fit another model using the same covariates. The following tables summarize the results.
 
-**Table: Summary of Estimated Coefficients (After Relabeling)**
+```{r table-estimated-coef-after-relabeling, echo=FALSE, message=FALSE, warning=FALSE}
+coef_table <- data.frame(
+  Term = c(
+    "Intercept",
+    "gkclasstypeRegular",
+    "gkclasstypeRegular+Aide",
+    "race_bnbTRUE",
+    "gkfreelunchNotFreeLunch"
+  ),
+  `Estimated Coefficient` = c(
+    457.51918,
+    -9.08674,
+    -8.21027,
+    -17.06417,
+    19.80765
+  ),
+  `Standard Error` = c(
+    11.00507,
+    2.61591,
+    2.56373,
+    2.23446,
+    1.26785
+  ),
+  `t Value` = c(
+    41.574,
+    -3.474,
+    -3.202,
+    -7.637,
+    15.623
+  )
+)
+
+kable(
+  coef_table,
+  caption = "Summary of Estimated Coefficients (After Relabeling)",
+  digits = c(0, 5, 5, 3),
+  align = c("l", "c", "c", "c"),
+  booktabs = TRUE
+) %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+```{r table-estimated-differences-after-relabeling, echo=FALSE, message=FALSE, warning=FALSE}
+
+diff_table <- data.frame(
+  `Class Size` = c(
+    "Small - Regular",
+    "Small - Regular + Aid",
+    "Regular - Regular + Aide"
+  ),
+  `Estimated Difference` = c(
+    9.087,
+    8.210,
+    -0.876
+  ),
+  `Standard Error` = c(
+    2.62,
+    2.56,
+    2.71
+  ),
+  `P-Value` = c(
+    0.0015,
+    0.0039,
+    0.9441
+  )
+)
+
+kable(
+  diff_table,
+  caption = "Summary of Estimated Differences (After Relabeling)",
+  digits = c(3, 3, 4),
+  align = c("l", "c", "c", "c"),
+  booktabs = TRUE
+) %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
 
 Based on the estimated coefficients and estimated differences, our conclusion does not appear to change. The signs of the estimated coefficients and estimated differences are unchanged, and their magnitudes are relatively unchanged as well. There is still a statistically significant difference in the scores of small classes compared to both regular classes and regular classes with aide, and the difference in scores between regular and regular with aide is still not statistically significant.
 
