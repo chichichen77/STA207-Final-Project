@@ -543,6 +543,35 @@ Acknowledgement:
 
 Generative AI was used to assist with code snippets for some visualizations. Our interpretations and conclusions are our own.
 
+::: section-nav
+<a href="#appendix" class="next-section-btn">👉 Next: Appendix</a>
+:::
+
+## Appendix {#appendix}
+```{r}
+# interaction plot of race and class type
+ggplot(data_clean_2, aes(x = gkclasstype, y = gktmathss, color = race_bnb, group = race_bnb)) +
+  stat_summary(fun = mean, geom = "point", size = 3) +
+  stat_summary(fun = mean, geom = "line", size = 1) +
+  labs(title = "Interaction of Race and Class Type", 
+       x = "Class Type",
+       y = "Total Math SAT Score",
+       color = "Race") +
+  scale_color_discrete(labels = c("TRUE" = "Black", "FALSE" = "Non-Black")) +
+  theme_minimal()
+```
+
+```{r}
+# interaction plot of free lunch status and class type
+ggplot(data_clean_2, aes(x = gkclasstype, y = gktmathss, color = gkfreelunch, group = gkfreelunch)) +
+  stat_summary(fun = mean, geom = "point", size = 3) +
+  stat_summary(fun = mean, geom = "line", size = 1) +
+  labs(title = "Interaction of Free Lunch Status and Class Type", 
+       x = "Class Type",
+       y = "Total Math SAT Score",
+       color = "Free Lunch Status") +
+  theme_minimal()
+```
 <a href="#top" class="back-to-top-btn" title="Back to top">↑ Top</a>
 
 ```{=html}
